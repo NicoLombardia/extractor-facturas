@@ -226,9 +226,9 @@ st.markdown("""
 # ── Pasos ──────────────────────────────────────────────────────────────
 with st.expander("ℹ️ ¿Cómo funciona? (3 pasos)", expanded=False):
     st.markdown("""
-<div class="step-box"><span class="step-num">1.</span> Subí uno o varios archivos PDF de facturas usando el botón de abajo.</div>
-<div class="step-box"><span class="step-num">2.</span> Hacé clic en <b>Procesar facturas</b> y esperá unos segundos.</div>
-<div class="step-box"><span class="step-num">3.</span> Descargá el Excel con el botón verde — ya tiene todos los datos en columnas.</div>
+<div class="step-box"><span class="step-num">1.</span> Adjunte su factura en formato PDF usando el botón de carga.</div>
+<div class="step-box"><span class="step-num">2.</span> Espere a que termine el proceso — la barra de progreso indica el avance.</div>
+<div class="step-box"><span class="step-num">3.</span> Descargue su Excel con los datos de la factura usando el botón verde.</div>
 """, unsafe_allow_html=True)
 
 st.divider()
