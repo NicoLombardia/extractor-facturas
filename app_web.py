@@ -190,27 +190,176 @@ def extraer_cuit_emisor(texto):
     return ""
 
 
-def extraer_datos(pdf_bytes, nombre_archivo):
+
+# ══════════════════════════════════════════════════════════════════════
+#  EXTRACCIÓN DE KILOS Y PRECIO/KG — POR PROVEEDOR
+# ══════════════════════════════════════════════════════════════════════
+
+def extraer_kilos_precio_aerolineas(texto_completo):
+    """Aerolíneas: kilos aforados totales y precio/kg desde páginas de detalle."""
+    m = re.search(r'TOTAL KILOS AFORADOS:\s*([\d\.]+)', texto_completo)
+    total_kg = float(m.group(1)) if m else None
+
+    guias = re.findall(
+        r'044-\d+\s+\d{2}-\d{2}-\d{4}\s+[\d,]+\s+(\d+)\s+\w+\s+\w+\s+\w+\s+\w+-\w+\s+\d+\s+([\d\.]+)',
+        texto_completo
+    )
+    if guias and total_kg and total_kg > 0:
+        total_imp = sum(float(g[1].replace('.','').replace(',','.')) for g in guias)
+        return total_kg, round(total_imp / total_kg, 2)
+    return total_kg, None
+
+
+def extraer_kilos_precio_handyway_liq(texto_liq):
+    """HandyWay liquidación: n° liq, kilos totales, precio/kg predominante."""
+    m_num = re.search(r'LIQUIDACION[:\s#]+\s*(\d+)', texto_liq, re.IGNORECASE)
+    n_liq = m_num.group(1).strip() if m_num else None
+
+    m_tot = re.search(r'\d+\s+([\d\.]+)\s+[\d\.]+\s+\$\s*([\d\.]+)', texto_liq)
+    total_kg  = float(m_tot.group(1)) if m_tot else None
+    total_imp = float(m_tot.group(2)) if m_tot else None
+
+    precios = re.findall(r'\$([\d\.]+)/kg', texto_liq)
+    precio_kg = None
+    if precios:
+        from collections import Counter
+        precio_kg = float(Counter(precios).most_common(1)[0][0])
+    elif total_kg and total_imp and total_kg > 0:
+        precio_kg = round(total_imp / total_kg, 2)
+
+    return n_liq, total_kg, precio_kg
+
+
+def extraer_kilos_precio_cruzdelsur_excel(excel_bytes, n_factura_pdf):
+    """Cruz del Sur Excel: kilos facturados y precio/kg, unido por NumeroDeFactura."""
+    try:
+        import openpyxl as _opx
+        wb = _opx.load_workbook(io.BytesIO(excel_bytes))
+        ws = wb.active
+        headers = [cell.value for cell in ws[1]]
+        idx = {h: i for i, h in enumerate(headers) if h}
+
+        for req in ['NumeroDeFactura', 'KilogramosFacturados', 'Flete']:
+            if req not in idx:
+                return None, None, f"Excel sin columna '{req}'"
+
+        total_kg = 0.0
+        total_flete = 0.0
+        coincide = False
+        n_pdf_clean = re.sub(r'[-\s]', '', n_factura_pdf or '')
+
+        for row in ws.iter_rows(min_row=2, values_only=True):
+            n_excel = re.sub(r'[-\s]', '', str(row[idx['NumeroDeFactura']] or ''))
+            if n_pdf_clean and n_excel and (n_pdf_clean in n_excel or n_excel in n_pdf_clean):
+                coincide = True
+                total_kg    += float(row[idx['KilogramosFacturados']] or 0)
+                total_flete += float(row[idx['Flete']] or 0)
+
+        if not coincide:
+            return None, None, f"N° factura no coincide con Excel"
+
+        precio_kg = round(total_flete / total_kg, 2) if total_kg > 0 else None
+        return total_kg, precio_kg, None
+    except Exception as e:
+        return None, None, str(e)
+
+
+def es_liquidacion_handyway(texto):
+    """Detecta si el PDF es una liquidación de HandyWay (no una factura)."""
+    return bool(re.search(r'LIQUIDACION[:\s#]+\s*\d+', texto, re.IGNORECASE)
+                and 'Handyway' in texto or 'HANDYWAY' in texto or 'handyway' in texto.lower())
+
+
+def es_excel_cruzdelsur(excel_bytes):
+    """Detecta si el Excel corresponde a Cruz del Sur (tiene NumeroDeFactura)."""
+    try:
+        import openpyxl as _opx
+        wb = _opx.load_workbook(io.BytesIO(excel_bytes))
+        headers = [cell.value for cell in wb.active[1]]
+        return 'NumeroDeFactura' in headers and 'KilogramosFacturados' in headers
+    except Exception:
+        return False
+
+
+def extraer_datos(pdf_bytes, nombre_archivo, archivos_complementarios=None):
+    """
+    archivos_complementarios: dict {nombre: bytes} de archivos .xlsx o PDF de liquidación
+    subidos junto a la factura para enriquecer los datos.
+    """
     resultado = {
-        "archivo": nombre_archivo,
-        "emisor": "",
-        "fecha_emision": "",
-        "importe_total": "",
+        "archivo":        nombre_archivo,
+        "emisor":         "",
+        "fecha_emision":  "",
+        "importe_total":  "",
         "numero_factura": "",
-        "cuit_emisor": "",
-        "error": "",
+        "cuit_emisor":    "",
+        "total_kilos":    "",
+        "precio_kg":      "",
+        "error":          "",
     }
     try:
         with pdfplumber.open(io.BytesIO(pdf_bytes)) as pdf:
-            texto = "\n".join(p.extract_text() or "" for p in pdf.pages[:2])
-        if not texto.strip():
+            texto_p1  = "\n".join(p.extract_text() or "" for p in pdf.pages[:2])
+            texto_all = "\n".join(p.extract_text() or "" for p in pdf.pages)
+
+        if not texto_p1.strip():
             resultado["error"] = "PDF escaneado — sin texto extraíble"
             return resultado
-        resultado["emisor"]         = extraer_emisor(texto)
-        resultado["fecha_emision"]  = extraer_fecha(texto)
-        resultado["importe_total"]  = extraer_importe(texto)
-        resultado["numero_factura"] = extraer_numero_factura(texto)
-        resultado["cuit_emisor"]    = extraer_cuit_emisor(texto)
+
+        resultado["emisor"]         = extraer_emisor(texto_p1)
+        resultado["fecha_emision"]  = extraer_fecha(texto_p1)
+        resultado["importe_total"]  = extraer_importe(texto_p1)
+        resultado["numero_factura"] = extraer_numero_factura(texto_p1)
+        resultado["cuit_emisor"]    = extraer_cuit_emisor(texto_p1)
+
+        emisor_up = resultado["emisor"].upper()
+
+        # ── Aerolíneas: kilos y precio/kg desde páginas de detalle del mismo PDF
+        if "AERO" in emisor_up or "30-64140555" in texto_p1:
+            kg, p_kg = extraer_kilos_precio_aerolineas(texto_all)
+            if kg:
+                resultado["total_kilos"] = str(int(kg)) if kg == int(kg) else str(kg)
+            if p_kg:
+                resultado["precio_kg"] = formatear_monto(p_kg)
+
+        # ── HandyWay: buscar PDF de liquidación en complementarios
+        elif "HANDY" in emisor_up or "30711164932" in texto_p1:
+            if archivos_complementarios:
+                for nombre_comp, bytes_comp in archivos_complementarios.items():
+                    if nombre_comp.lower().endswith('.pdf'):
+                        try:
+                            with pdfplumber.open(io.BytesIO(bytes_comp)) as pdf_c:
+                                texto_liq = "\n".join(p.extract_text() or "" for p in pdf_c.pages)
+                            if re.search(r'LIQUIDACION[:\s#]+\s*\d+', texto_liq, re.IGNORECASE):
+                                # Verificar que la liquidación corresponde a esta factura
+                                n_liq_en_factura = re.search(r'Liquidaci[oó]n\s*#?(\d+)', texto_p1)
+                                n_liq_en_liq     = re.search(r'LIQUIDACION[:\s#]+\s*(\d+)', texto_liq, re.IGNORECASE)
+                                if (n_liq_en_factura and n_liq_en_liq and
+                                        n_liq_en_factura.group(1) == n_liq_en_liq.group(1)):
+                                    _, kg, p_kg = extraer_kilos_precio_handyway_liq(texto_liq)
+                                    if kg:
+                                        resultado["total_kilos"] = str(kg)
+                                    if p_kg:
+                                        resultado["precio_kg"] = formatear_monto(p_kg)
+                        except Exception:
+                            pass
+
+        # ── Cruz del Sur: buscar Excel en complementarios, unir por N° factura
+        elif "CRUZ DEL SUR" in emisor_up or "MASSON" in emisor_up or "30-55656579" in texto_p1:
+            if archivos_complementarios:
+                for nombre_comp, bytes_comp in archivos_complementarios.items():
+                    if nombre_comp.lower().endswith('.xlsx'):
+                        kg, p_kg, err = extraer_kilos_precio_cruzdelsur_excel(
+                            bytes_comp, resultado["numero_factura"]
+                        )
+                        if err:
+                            resultado["error"] = err
+                        else:
+                            if kg:
+                                resultado["total_kilos"] = str(kg)
+                            if p_kg:
+                                resultado["precio_kg"] = formatear_monto(p_kg)
+
     except Exception as e:
         resultado["error"] = str(e)
     return resultado
@@ -225,6 +374,8 @@ COLUMNAS = {
     "emisor":         "Empresa / Emisor",
     "fecha_emision":  "Fecha de Emisión",
     "importe_total":  "Importe Total",
+    "total_kilos":    "Total Kilos",
+    "precio_kg":      "Precio por Kg",
     "numero_factura": "N° Comprobante",
     "cuit_emisor":    "CUIT Emisor",
     "error":          "Observaciones",
@@ -270,9 +421,9 @@ def generar_excel_bytes(registros):
         ws.cell(ri, col_imp).font = bf
 
     anchos = {
-        "Archivo": 30, "Empresa / Emisor": 35, "Fecha de Emisión": 16,
-        "Importe Total": 20, "N° Comprobante": 22, "CUIT Emisor": 18,
-        "Observaciones": 30,
+        "Archivo": 28, "Empresa / Emisor": 32, "Fecha de Emisión": 14,
+        "Importe Total": 18, "Total Kilos": 14, "Precio por Kg": 16,
+        "N° Comprobante": 20, "CUIT Emisor": 18, "Observaciones": 28,
     }
     for i, name in enumerate(COLUMNAS.values(), 1):
         ws.column_dimensions[get_column_letter(i)].width = anchos.get(name, 18)
@@ -414,49 +565,39 @@ st.markdown("""
 
 st.markdown('<hr class="ln-rule">', unsafe_allow_html=True)
 
-# ── Upload ───────────────────────────────────────────────────────────
-st.markdown('<p class="ln-upload-lbl">📎 &nbsp; Adjunte su documento</p>', unsafe_allow_html=True)
-
-# Traducir uploader al español con CSS
-st.markdown("""
-<style>
-/* Ocultar texto original en inglés */
-div[data-testid="stFileUploaderDropzone"] span[data-testid="stMarkdownContainer"] p,
-div[data-testid="stFileUploaderDropzone"] > div > span,
-div[data-testid="stFileUploaderDropzone"] > div > div > span,
-div[data-testid="stFileUploadDropzone"] span {
-    font-size: 0 !important;
-    color: transparent !important;
-}
-div[data-testid="stFileUploaderDropzone"] > div > div:first-child::before {
-    content: "Arrastre su archivo aquí";
-    font-size: 0.95rem;
-    color: #4A5568;
-    display: block;
-    margin-bottom: 4px;
-}
-div[data-testid="stFileUploaderDropzone"] > div > div:last-child::before {
-    content: "Límite 200MB · PDF";
-    font-size: 0.78rem;
-    color: #8A97B0;
-    display: block;
-}
-</style>
-""", unsafe_allow_html=True)
+# ── Upload facturas ─────────────────────────────────────────────────
+st.markdown('<p class="ln-upload-lbl">📎 &nbsp; 1. Adjunte las facturas PDF</p>', unsafe_allow_html=True)
 
 archivos = st.file_uploader(
-    "PDFs",
+    "Facturas PDF",
     type=["pdf"],
     accept_multiple_files=True,
     label_visibility="collapsed",
-    help="Puede seleccionar múltiples archivos PDF a la vez.",
+    help="Seleccione una o varias facturas en PDF.",
 )
 
 if archivos:
     n = len(archivos)
-    st.caption(f"✔  {n} archivo{'s' if n > 1 else ''} seleccionado{'s' if n > 1 else ''}.")
+    st.caption(f"✔  {n} factura{'s' if n > 1 else ''} cargada{'s' if n > 1 else ''}.")
 else:
     st.caption("Formatos admitidos: PDF · Factura electrónica AFIP")
+
+# ── Upload complementarios ───────────────────────────────────────────
+st.markdown("<br>", unsafe_allow_html=True)
+st.markdown('<p class="ln-upload-lbl">📎 &nbsp; 2. Adjunte archivos complementarios (opcional)</p>', unsafe_allow_html=True)
+
+complementarios = st.file_uploader(
+    "Complementarios",
+    type=["pdf", "xlsx"],
+    accept_multiple_files=True,
+    label_visibility="collapsed",
+    help="HandyWay: liquidación PDF · Cruz del Sur: Excel de detalle",
+)
+
+if complementarios:
+    st.caption(f"✔  {len(complementarios)} archivo{'s' if len(complementarios)>1 else ''} complementario{'s' if len(complementarios)>1 else ''} cargado{'s' if len(complementarios)>1 else ''}.")
+else:
+    st.caption("HandyWay: liquidación PDF · Cruz del Sur: Excel de detalle")
 
 # ── Botón ────────────────────────────────────────────────────────────
 procesar = st.button(
@@ -471,9 +612,15 @@ if procesar and archivos:
     total = len(archivos)
     prog  = st.progress(0, text="Iniciando...")
 
+    # Preparar dict de complementarios {nombre: bytes}
+    dict_comp = {}
+    if complementarios:
+        for comp in complementarios:
+            dict_comp[comp.name] = comp.read()
+
     for i, archivo in enumerate(archivos):
         prog.progress(i / total, text=f"Procesando {archivo.name}…")
-        datos = extraer_datos(archivo.read(), archivo.name)
+        datos = extraer_datos(archivo.read(), archivo.name, dict_comp)
         registros.append(datos)
         ok = not datos.get("error")
         resultados_ui.append((archivo.name, ok, datos.get("error", ""), datos))
@@ -505,6 +652,8 @@ if procesar and archivos:
             "Empresa / Emisor": d["emisor"] or "—",
             "Fecha de Emisión": d["fecha_emision"] or "—",
             "Importe Total":    d["importe_total"] or "—",
+            "Total Kilos":      d["total_kilos"] or "—",
+            "Precio por Kg":    d["precio_kg"] or "—",
             "N° Comprobante":   d["numero_factura"] or "—",
             "Observaciones":    err or "OK",
         })
