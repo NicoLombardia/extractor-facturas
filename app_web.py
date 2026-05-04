@@ -231,7 +231,10 @@ def extraer_kilos_precio_handyway_liq(texto_liq):
 
 
 def extraer_kilos_precio_cruzdelsur_excel(excel_bytes, n_factura_pdf):
-    """Cruz del Sur Excel: kilos facturados y precio/kg, unido por NumeroDeFactura."""
+    """
+    Cruz del Sur Excel: kilos facturados, precio/kg y destinos.
+    Une PDF + Excel por NumeroDeFactura → datos en una sola fila.
+    """
     try:
         import openpyxl as _opx
         wb = _opx.load_workbook(io.BytesIO(excel_bytes))
@@ -241,10 +244,11 @@ def extraer_kilos_precio_cruzdelsur_excel(excel_bytes, n_factura_pdf):
 
         for req in ['NumeroDeFactura', 'KilogramosFacturados', 'Flete']:
             if req not in idx:
-                return None, None, f"Excel sin columna '{req}'"
+                return None, None, None, f"Excel sin columna '{req}'"
 
         total_kg = 0.0
         total_flete = 0.0
+        destinos = []
         coincide = False
         n_pdf_clean = re.sub(r'[-\s]', '', n_factura_pdf or '')
 
@@ -254,20 +258,34 @@ def extraer_kilos_precio_cruzdelsur_excel(excel_bytes, n_factura_pdf):
                 coincide = True
                 total_kg    += float(row[idx['KilogramosFacturados']] or 0)
                 total_flete += float(row[idx['Flete']] or 0)
+                # Destino si existe la columna
+                if 'DestinoLocalidad' in idx:
+                    dest = str(row[idx['DestinoLocalidad']] or '').strip()
+                    if dest and dest not in destinos:
+                        destinos.append(dest)
 
         if not coincide:
-            return None, None, f"N° factura no coincide con Excel"
+            return None, None, None, "N° factura no coincide con Excel"
 
         precio_kg = round(total_flete / total_kg, 2) if total_kg > 0 else None
-        return total_kg, precio_kg, None
+        destinos_str = ", ".join(destinos) if destinos else None
+        return total_kg, precio_kg, destinos_str, None
     except Exception as e:
-        return None, None, str(e)
+        return None, None, None, str(e)
 
 
 def es_liquidacion_handyway(texto):
-    """Detecta si el PDF es una liquidación de HandyWay (no una factura)."""
-    return bool(re.search(r'LIQUIDACION[:\s#]+\s*\d+', texto, re.IGNORECASE)
-                and 'Handyway' in texto or 'HANDYWAY' in texto or 'handyway' in texto.lower())
+    """
+    Detecta si el PDF es una liquidación de HandyWay.
+    El logo está como imagen — detectamos por estructura del contenido.
+    Criterio principal: tiene la frase "Se liquidan las siguientes guias"
+    y tiene líneas con Kgs:XX (envíos). Las facturas AFIP tienen CUIT: y CAE N°.
+    """
+    tiene_liq_a  = bool(re.search(r'Se liquidan las siguientes', texto, re.IGNORECASE))
+    tiene_guias  = bool(re.search(r'Kgs:[\d\.]+', texto))
+    tiene_importe_total = bool(re.search(r'Importe Total', texto))
+    # Es liquidación si tiene la frase característica + guías, sin "Importe Total" (de facturas AFIP)
+    return tiene_liq_a and tiene_guias and not tiene_importe_total
 
 
 def es_excel_cruzdelsur(excel_bytes):
@@ -295,6 +313,7 @@ def extraer_datos(pdf_bytes, nombre_archivo, archivos_complementarios=None):
         "cuit_emisor":    "",
         "total_kilos":    "",
         "precio_kg":      "",
+        "destinos":       "",
         "error":          "",
     }
     try:
@@ -349,16 +368,19 @@ def extraer_datos(pdf_bytes, nombre_archivo, archivos_complementarios=None):
             if archivos_complementarios:
                 for nombre_comp, bytes_comp in archivos_complementarios.items():
                     if nombre_comp.lower().endswith('.xlsx'):
-                        kg, p_kg, err = extraer_kilos_precio_cruzdelsur_excel(
+                        kg, p_kg, destinos, err = extraer_kilos_precio_cruzdelsur_excel(
                             bytes_comp, resultado["numero_factura"]
                         )
-                        if err:
-                            resultado["error"] = err
-                        else:
-                            if kg:
-                                resultado["total_kilos"] = str(kg)
-                            if p_kg:
+                        if kg is not None:
+                            # Encontró el Excel correcto — guardar y dejar de buscar
+                            resultado["total_kilos"] = str(kg)
+                            if p_kg is not None:
                                 resultado["precio_kg"] = formatear_monto(p_kg)
+                            if destinos:
+                                resultado["destinos"] = destinos
+                            resultado["error"] = ""  # limpiar cualquier error previo
+                            break  # no seguir con otros xlsx
+                        # Si no coincidió, continuar al siguiente xlsx silenciosamente
 
     except Exception as e:
         resultado["error"] = str(e)
@@ -376,6 +398,7 @@ COLUMNAS = {
     "importe_total":  "Importe Total",
     "total_kilos":    "Total Kilos",
     "precio_kg":      "Precio por Kg",
+    "destinos":       "Destinos",
     "numero_factura": "N° Comprobante",
     "cuit_emisor":    "CUIT Emisor",
     "error":          "Observaciones",
@@ -421,9 +444,9 @@ def generar_excel_bytes(registros):
         ws.cell(ri, col_imp).font = bf
 
     anchos = {
-        "Archivo": 28, "Empresa / Emisor": 32, "Fecha de Emisión": 14,
-        "Importe Total": 18, "Total Kilos": 14, "Precio por Kg": 16,
-        "N° Comprobante": 20, "CUIT Emisor": 18, "Observaciones": 28,
+        "Archivo": 26, "Empresa / Emisor": 30, "Fecha de Emisión": 14,
+        "Importe Total": 18, "Total Kilos": 12, "Precio por Kg": 16,
+        "Destinos": 24, "N° Comprobante": 20, "CUIT Emisor": 18, "Observaciones": 28,
     }
     for i, name in enumerate(COLUMNAS.values(), 1):
         ws.column_dimensions[get_column_letter(i)].width = anchos.get(name, 18)
@@ -613,17 +636,57 @@ if procesar and archivos:
     prog  = st.progress(0, text="Iniciando...")
 
     # Preparar dict de complementarios {nombre: bytes}
+    # También detectar liquidaciones HandyWay o Excel subidos como facturas y reubicarlos
     dict_comp = {}
+    archivos_reales = []
+
     if complementarios:
         for comp in complementarios:
             dict_comp[comp.name] = comp.read()
 
-    for i, archivo in enumerate(archivos):
-        prog.progress(i / total, text=f"Procesando {archivo.name}…")
-        datos = extraer_datos(archivo.read(), archivo.name, dict_comp)
+    for archivo in archivos:
+        raw = archivo.read()
+        # Detectar si es una liquidación HandyWay subida por error en facturas
+        if archivo.name.lower().endswith('.pdf'):
+            try:
+                import io as _io
+                import pdfplumber as _plb
+                with _plb.open(_io.BytesIO(raw)) as _pdf:
+                    _texto = "\n".join(p.extract_text() or "" for p in _pdf.pages[:1])
+                # Detectar liquidación HandyWay
+                if es_liquidacion_handyway(_texto):
+                    dict_comp[archivo.name] = raw
+                    continue
+                # Detectar cualquier PDF sin estructura de factura (sin CUIT emisor ni importe)
+                # que tenga contenido de liquidación/detalle
+                _tiene_factura = bool(re.search(
+                    r'Comprob\. N[º°]|FACTURA|Importe Total|TOTAL EN PESOS', _texto
+                ))
+                _tiene_liquidacion = bool(re.search(
+                    r'LIQUIDACION|Se liquidan|liquidaci[oó]n', _texto, re.IGNORECASE
+                ))
+                if _tiene_liquidacion and not _tiene_factura:
+                    dict_comp[archivo.name] = raw
+                    continue
+            except Exception:
+                pass
+        # Detectar Excel subido en facturas
+        if archivo.name.lower().endswith('.xlsx'):
+            dict_comp[archivo.name] = raw
+            continue
+        archivos_reales.append((archivo.name, raw))
+
+    total = len(archivos_reales)
+    if total == 0:
+        st.warning("No se encontraron facturas PDF para procesar.")
+        st.stop()
+
+    for i, (nombre, raw) in enumerate(archivos_reales):
+        prog.progress(i / total, text=f"Procesando {nombre}…")
+        datos = extraer_datos(raw, nombre, dict_comp)
         registros.append(datos)
         ok = not datos.get("error")
-        resultados_ui.append((archivo.name, ok, datos.get("error", ""), datos))
+        resultados_ui.append((nombre, ok, datos.get("error", ""), datos))
 
     prog.progress(1.0, text="Completado.")
     st.markdown("<br>", unsafe_allow_html=True)
@@ -654,6 +717,7 @@ if procesar and archivos:
             "Importe Total":    d["importe_total"] or "—",
             "Total Kilos":      d["total_kilos"] or "—",
             "Precio por Kg":    d["precio_kg"] or "—",
+            "Destinos":         d.get("destinos") or "—",
             "N° Comprobante":   d["numero_factura"] or "—",
             "Observaciones":    err or "OK",
         })
