@@ -282,7 +282,7 @@ def parse_handyway_factura(pdf_bytes, nombre_archivo):
         'año':            año_de_fecha(fecha),
         'numero_factura': nro,
         'archivo':        nombre_archivo,
-        'error':          f'Liquidación #{ref_liq} — ver detalle adjunto' if ref_liq else '',
+        'error':          f'Factura resumen de Liquidación #{ref_liq} — datos ya incluidos vía el PDF de detalle, no se duplican' if ref_liq else '',
         '_advertencia':   True,
     }]
 
@@ -485,18 +485,21 @@ def procesar_archivo(archivo_bytes, nombre, archivos_extra=None):
 # ══════════════════════════════════════════════════════════════════════
 
 COLS = [
+    # ── Identificación ──────────────────────────
+    ("NUMERO DE FACTURA",  22),
+    ("PROVEEDOR",          20),
     ("Fecha",              18),
+    ("Mes",                8),
+    ("AÑO",                8),
+    # ── Recorrido ────────────────────────────────
     ("Origen",             22),
     ("Destino",            22),
-    ("kilos aforados",     16),
-    ("Clase",              10),
-    ("Fac Total",          16),
-    ("Mes",                8),
-    ("PROVEEDOR",          20),
     ("TRAMO",              36),
     ("TIPO DE DESPACHO",   20),
-    ("AÑO",                8),
-    ("NUMERO DE FACTURA",  22),
+    ("Clase",              10),
+    # ── Datos económicos ─────────────────────────
+    ("kilos aforados",     16),
+    ("Fac Total",          16),
     ("PRECIO POR KILO",    18),
 ]
 
@@ -529,22 +532,22 @@ def generar_excel(filas):
 
     for ri, d in enumerate(filas, 2):
         fill = S_FILL if ri % 2 == 0 else N_FILL
-        cF = get_column_letter(6)   # Fac Total
-        cK = get_column_letter(4)   # kilos aforados
+        cF = get_column_letter(12)  # Fac Total
+        cK = get_column_letter(11)  # kilos aforados
 
         vals = [
+            d.get('numero_factura', ''),
+            d.get('proveedor', ''),
             d.get('fecha', ''),
+            d.get('mes', ''),
+            d.get('año', ''),
             d.get('origen', ''),
             d.get('destino', ''),
-            d.get('kilos_aforados') or '',
-            d.get('clase', ''),
-            d.get('fac_total') or '',
-            d.get('mes', ''),
-            d.get('proveedor', ''),
             d.get('tramo', ''),
             d.get('tipo_despacho', ''),
-            d.get('año', ''),
-            d.get('numero_factura', ''),
+            d.get('clase', ''),
+            d.get('kilos_aforados') or '',
+            d.get('fac_total') or '',
             None,  # PRECIO POR KILO — fórmula
         ]
 
@@ -554,10 +557,10 @@ def generar_excel(filas):
             if ci == 13:
                 c.value = f"=IFERROR({cF}{ri}/{cK}{ri},\"\")"
                 c.alignment, c.number_format = AR, '#,##0.00'
-            elif ci == 6:
+            elif ci == 12:
                 c.value = v
                 c.alignment, c.number_format = AR, '#,##0.00'
-            elif ci in (4, 7, 11):
+            elif ci in (4, 5, 10, 11):
                 c.value = v
                 c.alignment = AC
             else:
@@ -572,14 +575,14 @@ def generar_excel(filas):
     ws.cell(row=tr, column=1, value="TOTAL").font = Font(name="Arial", bold=True, size=10)
     ws.cell(row=tr, column=1).alignment = AL
 
-    for ci, col_l in [(4, get_column_letter(4)), (6, get_column_letter(6))]:
+    for ci, col_l in [(11, get_column_letter(11)), (12, get_column_letter(12))]:
         c = ws.cell(row=tr, column=ci, value=f"=SUM({col_l}2:{col_l}{tr-1})")
         c.font, c.fill, c.border = TF, TL, BORDER
-        c.alignment = AR if ci == 6 else AC
-        if ci == 6: c.number_format = '#,##0.00'
+        c.alignment = AR if ci == 12 else AC
+        if ci == 12: c.number_format = '#,##0.00'
 
     c13 = ws.cell(row=tr, column=13,
-                  value=f"=IFERROR({get_column_letter(6)}{tr}/{get_column_letter(4)}{tr},\"\")")
+                  value=f"=IFERROR({get_column_letter(12)}{tr}/{get_column_letter(11)}{tr},\"\")")
     c13.font, c13.fill, c13.border = TF, TL, BORDER
     c13.alignment, c13.number_format = AR, '#,##0.00'
 
