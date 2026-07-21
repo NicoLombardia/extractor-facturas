@@ -29,12 +29,20 @@ def get_logo_b64():
 
 def limpiar_monto(s):
     s = str(s).strip().replace('\xa0', '')
-    # Formato argentino: 1.234.567,89 → quitar puntos, cambiar coma
-    if re.search(r'\d\.\d{3}', s):
+    if not s:
+        return 0.0
+    ultimo_punto = s.rfind('.')
+    ultimo_coma  = s.rfind(',')
+    if ultimo_coma > ultimo_punto:
+        # La coma es el separador decimal (formato argentino: 1.234.567,89)
         s = s.replace('.', '').replace(',', '.')
+    elif ultimo_punto > ultimo_coma:
+        # El punto es el separador decimal, la coma es de miles (formato: 1,234,567.89)
+        s = s.replace(',', '')
     else:
+        # Sin separadores mixtos
         s = s.replace(',', '.')
-    s = re.sub(r'[^\d\.]', '', s)
+    s = re.sub(r'[^\d\.\-]', '', s)
     try:
         return float(s)
     except Exception:
@@ -380,9 +388,9 @@ def parse_cruz_del_sur_pdf(pdf_bytes, nombre_archivo):
         r'(\d+)\s+'                         # NIC
         r'R-\d+-\d+\s+'                     # Carta de porte
         r'\d+-\d+\s+'                       # REMITO
-        r'([\d,\.]+)\s+'                    # FLETE
-        r'[\d\.,]+\s+[\d\.,]+\s+[\d\.,]+\s+([\d\.,]+)\s+'  # ACR CC GGRUA VARIOS
-        r'([\d,\.]+)'                       # IMPORTE
+        r'(-?[\d,\.]+)\s+'                  # FLETE
+        r'-?[\d\.,]+\s+-?[\d\.,]+\s+-?[\d\.,]+\s+(-?[\d\.,]+)\s+'  # ACR CC GGRUA VARIOS
+        r'(-?[\d,\.]+)'                      # IMPORTE
     )
     
     filas = []
