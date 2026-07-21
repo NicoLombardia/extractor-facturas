@@ -200,6 +200,7 @@ def parse_handyway(pdf_bytes, nombre_archivo):
 
     patron_guia  = re.compile(r'^(\d{1,2}[/.]\d{2}[/.]\d{2})\s+(\d+)\s+([A-Z]{3})\s+([A-Z]{3})\s+')
     patron_kgs   = re.compile(r'(?:Kgs|PVol):([\d.]+)')
+    patron_clase = re.compile(r'\b(Prime|Standard)\b', re.IGNORECASE)
     patron_total = re.compile(r'=\s*\$\s*([\d.,]+)')
 
     i = 0
@@ -210,10 +211,14 @@ def parse_handyway(pdf_bytes, nombre_archivo):
             origen  = iata(m.group(3))
             destino = iata(m.group(4))
             kilos = 0
+            clase = ''
             for j in range(i, min(i+4, len(lineas))):
                 mk = patron_kgs.search(lineas[j])
                 if mk:
                     kilos = int(round(float(mk.group(1))))
+                    mc = patron_clase.search(lineas[j])
+                    if mc:
+                        clase = mc.group(1).capitalize()
                     break
             importe = 0.0
             for j in range(i+1, min(i+5, len(lineas))):
@@ -229,7 +234,7 @@ def parse_handyway(pdf_bytes, nombre_archivo):
                     'origen':         origen,
                     'destino':        destino,
                     'kilos_aforados': kilos,
-                    'clase':          '',
+                    'clase':          clase,
                     'fac_total':      importe,
                     'mes':            mes_de_fecha(fecha_liq),
                     'proveedor':      'HANDYWAY',
