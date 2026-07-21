@@ -152,7 +152,6 @@ def parse_aerolineas(pdf_bytes, nombre_archivo):
             for m in patron_guia.finditer(texto):
                 fecha_guia  = normalizar_fecha(m.group(1).replace('-', '/'))
                 kilos       = int(m.group(3))
-                tipo_carga  = m.group(4)
                 origen      = iata(m.group(5))
                 destino     = iata(m.group(6))
                 tramo       = f"{origen} {destino}"
@@ -163,7 +162,7 @@ def parse_aerolineas(pdf_bytes, nombre_archivo):
                     'origen':          origen,
                     'destino':         destino,
                     'kilos_aforados':  kilos,
-                    'clase':           tipo_carga,
+                    'clase':           'Prime',  # Aerolíneas siempre es Prime
                     'fac_total':       importe,
                     'mes':             mes_de_fecha(fecha_fac),
                     'proveedor':       'AEROLINEAS',
