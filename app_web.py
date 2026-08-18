@@ -158,17 +158,17 @@ def parse_aerolineas(pdf_bytes, nombre_archivo):
                 importe     = limpiar_monto(m.group(9))
                 
                 filas.append({
-                    'fecha':           fecha_fac,
+                    'fecha':           fecha_guia,
                     'origen':          origen,
                     'destino':         destino,
                     'kilos_aforados':  kilos,
                     'clase':           'Prime',  # Aerolíneas siempre es Prime
                     'fac_total':       importe,
-                    'mes':             mes_de_fecha(fecha_fac),
+                    'mes':             mes_de_fecha(fecha_guia),
                     'proveedor':       'AEROLINEAS',
                     'tramo':           tramo,
                     'tipo_despacho':   'ENVIO',
-                    'año':             año_de_fecha(fecha_fac),
+                    'año':             año_de_fecha(fecha_guia),
                     'numero_factura':  nro_factura,
                     'archivo':         nombre_archivo,
                     'error':           '',
@@ -229,18 +229,19 @@ def parse_handyway(pdf_bytes, nombre_archivo):
             if kilos > 0 or importe > 0:
                 # Devolución si el origen no es Buenos Aires (AEP)
                 tipo_d = 'DEVOLUCION' if m.group(3) != 'AEP' else 'ENVIO'
+                fecha_guia = normalizar_fecha(m.group(1))
                 filas.append({
-                    'fecha':          fecha_liq,
+                    'fecha':          fecha_guia,
                     'origen':         origen,
                     'destino':        destino,
                     'kilos_aforados': kilos,
                     'clase':          clase,
                     'fac_total':      importe,
-                    'mes':            mes_de_fecha(fecha_liq),
+                    'mes':            mes_de_fecha(fecha_guia),
                     'proveedor':      'HANDYWAY',
                     'tramo':          f"{origen} {destino}",
                     'tipo_despacho':  tipo_d,
-                    'año':            año_de_fecha(fecha_liq),
+                    'año':            año_de_fecha(fecha_guia),
                     'numero_factura': nro_liq,
                     'archivo':        nombre_archivo,
                     'error':          '',
@@ -323,6 +324,8 @@ def parse_cruz_del_sur_xlsx(xlsx_bytes, nombre_archivo, nro_factura, fecha_fac):
         destino_raw = str(row.get('DestinoLocalidad', '') or '').strip().upper()
         remitente   = str(row.get('Remitente', '') or '').strip().upper()
 
+        fecha_guia = normalizar_fecha(row.get('FecEnvio', '')) or fecha_fac
+
         # Si el remitente NO es La Nación, es una devolución (el origen es la provincia)
         es_la_nacion = 'LA NACION' in remitente or not remitente
         if es_la_nacion:
@@ -340,17 +343,17 @@ def parse_cruz_del_sur_xlsx(xlsx_bytes, nombre_archivo, nro_factura, fecha_fac):
         tramo = f"{origen_raw} {destino_raw}"
 
         filas.append({
-            'fecha':          fecha_fac,
+            'fecha':          fecha_guia,
             'origen':         origen_raw,
             'destino':        destino_raw,
             'kilos_aforados': kilos,
             'clase':          '',
             'fac_total':      importe,
-            'mes':            mes_de_fecha(fecha_fac),
+            'mes':            mes_de_fecha(fecha_guia),
             'proveedor':      'CRUZ DEL SUR',
             'tramo':          tramo,
             'tipo_despacho':  tipo_despacho,
-            'año':            año_de_fecha(fecha_fac),
+            'año':            año_de_fecha(fecha_guia),
             'numero_factura': nro_factura,
             'archivo':        nombre_archivo,
             'error':          '',
@@ -388,18 +391,19 @@ def parse_cruz_del_sur_pdf(pdf_bytes, nombre_archivo):
     filas = []
     for m2 in patron.finditer(texto):
         importe = limpiar_monto(m2.group(5))
+        fecha_fila = normalizar_fecha(m2.group(1))
         filas.append({
-            'fecha':          fecha,
+            'fecha':          fecha_fila,
             'origen':         'BUENOS AIRES',
             'destino':        'RIO GRANDE',   # Cruz del Sur opera BUE-RGA típicamente
             'kilos_aforados': 0,              # No figura en el PDF, está en el XLSX
             'clase':          '',
             'fac_total':      importe,
-            'mes':            mes_de_fecha(fecha),
+            'mes':            mes_de_fecha(fecha_fila),
             'proveedor':      'CRUZ DEL SUR',
             'tramo':          'BUENOS AIRES RIO GRANDE',
             'tipo_despacho':  'ENVIO',
-            'año':            año_de_fecha(fecha),
+            'año':            año_de_fecha(fecha_fila),
             'numero_factura': nro,
             'archivo':        nombre_archivo,
             'error':          '',
