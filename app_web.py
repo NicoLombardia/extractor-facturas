@@ -362,6 +362,62 @@ def parse_cruz_del_sur_xlsx(xlsx_bytes, nombre_archivo, nro_factura, fecha_fac):
     return filas
 
 
+def parse_cruz_del_sur_unificado_xlsx(xlsx_bytes, nombre_archivo):
+    """XLSX 'UNIFICADO' de Cruz del Sur — trae varias facturas en un solo archivo,
+    identificadas por la columna NUMERO FACTURA, con ORIGEN/DESTINO ya resueltos
+    por fila. No requiere un PDF asociado."""
+    df = pd.read_excel(io.BytesIO(xlsx_bytes), header=0)
+
+    filas = []
+    for _, row in df.iterrows():
+        letra = str(row.get('LETRA FACTURA', '') or '').strip()
+        nro_raw = row.get('NUMERO FACTURA', '')
+        try:
+            nro = str(int(nro_raw)).zfill(8)
+        except Exception:
+            nro = str(nro_raw).strip()
+        nro_factura = f"{letra}-{nro}" if letra else nro
+
+        fecha_guia = normalizar_fecha(row.get('FECHA', '')) or normalizar_fecha(row.get('FECHA FACTURA', ''))
+
+        try:
+            kilos = int(float(row.get('KILOS', 0) or 0))
+        except Exception:
+            kilos = 0
+
+        try:
+            importe = float(row.get('TOTAL', 0) or 0)
+        except Exception:
+            importe = 0.0
+
+        origen_raw  = str(row.get('ORIGEN', '') or '').strip().upper()
+        destino_raw = str(row.get('DESTINO', '') or '').strip().upper()
+
+        if not destino_raw:
+            continue
+
+        tipo_despacho = 'ENVIO' if 'BUENOS AIRES' in origen_raw else 'DEVOLUCION'
+        tramo = f"{origen_raw} {destino_raw}"
+
+        filas.append({
+            'fecha':          fecha_guia,
+            'origen':         origen_raw,
+            'destino':        destino_raw,
+            'kilos_aforados': kilos,
+            'clase':          '',
+            'fac_total':      importe,
+            'mes':            mes_de_fecha(fecha_guia),
+            'proveedor':      'CRUZ DEL SUR',
+            'tramo':          tramo,
+            'tipo_despacho':  tipo_despacho,
+            'año':            año_de_fecha(fecha_guia),
+            'numero_factura': nro_factura,
+            'archivo':        nombre_archivo,
+            'error':          '',
+        })
+
+    return filas
+
 
 def parse_cruz_del_sur_pdf(pdf_bytes, nombre_archivo):
     """Parsea el PDF de Cruz del Sur (anexo con tabla Fecha|NIC|REMITO|FLETE|VARIOS|IMPORTE)."""
@@ -436,7 +492,11 @@ def procesar_archivo(archivo_bytes, nombre, archivos_extra=None):
         
         # ¿Es XLSX? (detalle Cruz del Sur)
         if nombre_up.endswith('.XLSX'):
-            # Solo se procesa si viene acompañado del PDF correspondiente
+            # XLSX "unificado": trae varias facturas propias, se procesa solo
+            if 'UNIFICADO' in nombre_up:
+                return parse_cruz_del_sur_unificado_xlsx(archivo_bytes, nombre)
+            # XLSX de detalle de una sola factura: solo se procesa si viene
+            # acompañado del PDF correspondiente
             return []
         
         # Leer texto del PDF para detectar proveedor
@@ -650,19 +710,33 @@ if procesar and archivos:
     pdfs  = {a.name: a.read() for a in archivos if not a.name.upper().endswith('.XLSX')}
     xlsxs = {a.name: a.read() for a in archivos if a.name.upper().endswith('.XLSX')}
     
+    # XLSX "unificados" de Cruz del Sur se procesan solos, sin PDF asociado
+    xlsxs_unificados = {n: b for n, b in xlsxs.items() if 'UNIFICADO' in n.upper()}
+
     todas_filas = []
     resultados_ui = []
-    total = len(pdfs)
+    total = len(pdfs) + len(xlsxs_unificados)
     prog = st.progress(0, text="Iniciando...")
-    
-    for i, (nombre, bites) in enumerate(pdfs.items()):
-        prog.progress(i / total, text=f"Procesando {nombre}…")
+    procesados = 0
+
+    for nombre, bites in pdfs.items():
+        prog.progress(procesados / total if total else 1.0, text=f"Procesando {nombre}…")
         filas = procesar_archivo(bites, nombre, archivos_extra=xlsxs)
         todas_filas.extend(filas)
         errores = [f for f in filas if f.get('error') and not f.get('_advertencia')]
         advertencias = [f for f in filas if f.get('_advertencia')]
         resultados_ui.append((nombre, filas, errores, advertencias))
-    
+        procesados += 1
+
+    for nombre, bites in xlsxs_unificados.items():
+        prog.progress(procesados / total if total else 1.0, text=f"Procesando {nombre}…")
+        filas = procesar_archivo(bites, nombre, archivos_extra=xlsxs)
+        todas_filas.extend(filas)
+        errores = [f for f in filas if f.get('error') and not f.get('_advertencia')]
+        advertencias = [f for f in filas if f.get('_advertencia')]
+        resultados_ui.append((nombre, filas, errores, advertencias))
+        procesados += 1
+
     prog.progress(1.0, text="Completado.")
     st.markdown("---")
     st.subheader("Resultados")
